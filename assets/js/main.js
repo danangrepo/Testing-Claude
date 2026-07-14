@@ -85,7 +85,7 @@
 
       hub.x = size / 2;
       hub.y = size / 2;
-      var radius = size * 0.34;
+      var radius = size * 0.3;
       nodes = labels.map(function (label, i) {
         var angle = (Math.PI * 2 * i) / labels.length - Math.PI / 2;
         return {
@@ -101,51 +101,122 @@
 
     function draw(size) {
       ctx.clearRect(0, 0, size, size);
-      var lineColor = getColor('--line') || 'rgba(0,0,0,0.14)';
       var tealColor = getColor('--teal') || '#3e6e63';
+      var tealStrong = getColor('--teal-strong') || '#0c4a3a';
       var amberColor = getColor('--amber') || '#e1a13b';
       var inkColor = getColor('--ink') || '#12211c';
+      var hubRadius = size * 0.3;
 
-      ctx.lineWidth = 1;
+      // slow radar sweep, very faint
+      var sweepAngle = reduceMotion ? -Math.PI / 4 : t * 0.35;
+      var sweepGrad = ctx.createConicGradient
+        ? ctx.createConicGradient(sweepAngle, hub.x, hub.y)
+        : null;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(hub.x, hub.y, hubRadius * 1.14, 0, Math.PI * 2);
+      ctx.clip();
+      if (sweepGrad) {
+        sweepGrad.addColorStop(0, color_mix(tealColor, 0.16));
+        sweepGrad.addColorStop(0.12, color_mix(tealColor, 0));
+        sweepGrad.addColorStop(1, color_mix(tealColor, 0));
+        ctx.fillStyle = sweepGrad;
+        ctx.fillRect(0, 0, size, size);
+      }
+      ctx.restore();
+
+      // measurement rings
       ctx.strokeStyle = tealColor;
-      ctx.globalAlpha = 0.55;
-      nodes.forEach(function (n) {
+      ctx.globalAlpha = 0.16;
+      ctx.lineWidth = 1;
+      [0.62, 1].forEach(function (f) {
         ctx.beginPath();
-        ctx.moveTo(hub.x, hub.y);
-        ctx.lineTo(n.x, n.y);
+        ctx.arc(hub.x, hub.y, hubRadius * f, 0, Math.PI * 2);
         ctx.stroke();
       });
       ctx.globalAlpha = 1;
 
-      var pulse = reduceMotion ? 0 : Math.sin(t) * 0.5 + 0.5;
-      nodes.forEach(function (n, i) {
-        var phase = Math.sin(t + i * 1.3) * 0.5 + 0.5;
+      // spokes with fade-out gradient + midpoint tick
+      nodes.forEach(function (n) {
+        var grad = ctx.createLinearGradient(hub.x, hub.y, n.x, n.y);
+        grad.addColorStop(0, color_mix(tealColor, 0.75));
+        grad.addColorStop(1, color_mix(tealColor, 0.12));
+        ctx.strokeStyle = grad;
+        ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.arc(n.x, n.y, 4.5, 0, Math.PI * 2);
+        ctx.moveTo(hub.x, hub.y);
+        ctx.lineTo(n.x, n.y);
+        ctx.stroke();
+
+        var mx = hub.x + (n.x - hub.x) * 0.62;
+        var my = hub.y + (n.y - hub.y) * 0.62;
+        var perp = n.angle + Math.PI / 2;
+        var tickLen = 3.5;
+        ctx.strokeStyle = color_mix(tealColor, 0.4);
+        ctx.beginPath();
+        ctx.moveTo(mx - Math.cos(perp) * tickLen, my - Math.sin(perp) * tickLen);
+        ctx.lineTo(mx + Math.cos(perp) * tickLen, my + Math.sin(perp) * tickLen);
+        ctx.stroke();
+      });
+
+      // node reticles: outer ring + inner pulsing dot
+      nodes.forEach(function (n, i) {
+        var phase = reduceMotion ? 0.7 : Math.sin(t * 1.4 + i * 1.3) * 0.5 + 0.5;
+
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 6, 0, Math.PI * 2);
+        ctx.strokeStyle = color_mix(tealColor, 0.5);
+        ctx.lineWidth = 1;
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, 2.5, 0, Math.PI * 2);
         ctx.fillStyle = amberColor;
-        ctx.globalAlpha = 0.55 + phase * 0.45;
+        ctx.globalAlpha = 0.6 + phase * 0.4;
         ctx.fill();
         ctx.globalAlpha = 1;
 
         ctx.font = '600 9px "JetBrains Mono", monospace';
         ctx.fillStyle = inkColor;
-        ctx.globalAlpha = 0.75;
-        var offsetX = Math.cos(n.angle) * 16;
-        var offsetY = Math.sin(n.angle) * 16;
+        ctx.globalAlpha = 0.78;
+        var offsetX = Math.cos(n.angle) * 15;
+        var offsetY = Math.sin(n.angle) * 15;
         ctx.textAlign = Math.cos(n.angle) > 0.3 ? 'left' : Math.cos(n.angle) < -0.3 ? 'right' : 'center';
         ctx.fillText(n.label, n.x + offsetX, n.y + offsetY);
         ctx.globalAlpha = 1;
       });
 
+      // hub: soft glow + concentric rings + core
+      var pulse = reduceMotion ? 0 : Math.sin(t) * 0.5 + 0.5;
+      var glow = ctx.createRadialGradient(hub.x, hub.y, 0, hub.x, hub.y, 26);
+      glow.addColorStop(0, color_mix(amberColor, 0.28));
+      glow.addColorStop(1, color_mix(amberColor, 0));
+      ctx.fillStyle = glow;
       ctx.beginPath();
-      ctx.arc(hub.x, hub.y, 8 + pulse * 1.5, 0, Math.PI * 2);
-      ctx.strokeStyle = tealColor;
+      ctx.arc(hub.x, hub.y, 26, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.beginPath();
+      ctx.arc(hub.x, hub.y, 10 + pulse * 1.5, 0, Math.PI * 2);
+      ctx.strokeStyle = tealStrong;
       ctx.lineWidth = 1.25;
       ctx.stroke();
       ctx.beginPath();
-      ctx.arc(hub.x, hub.y, 4, 0, Math.PI * 2);
+      ctx.arc(hub.x, hub.y, 6.5, 0, Math.PI * 2);
+      ctx.strokeStyle = color_mix(tealColor, 0.5);
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(hub.x, hub.y, 3.5, 0, Math.PI * 2);
       ctx.fillStyle = amberColor;
       ctx.fill();
+    }
+
+    function color_mix(hex, alpha) {
+      var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+      if (!m) return hex;
+      var r = parseInt(m[1], 16), g = parseInt(m[2], 16), b = parseInt(m[3], 16);
+      return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
     }
 
     function loop() {
