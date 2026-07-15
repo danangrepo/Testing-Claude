@@ -2,7 +2,7 @@
   'use strict';
 
   var root = document.documentElement;
-  var THEME_KEY = 'untai-theme';
+  var THEME_KEY = 'zeinlabs-theme';
 
   function applyTheme(theme) {
     if (theme === 'dark' || theme === 'light') {
