@@ -172,7 +172,7 @@ p.lede {
   flex-shrink: 0;
 }
 .brand-mark circle { fill: var(--amber); }
-.brand-mark path { stroke: var(--teal-strong); stroke-width: 1.5; fill: none; }
+.brand-mark path { stroke: var(--teal-strong); stroke-width: 1.6; fill: none; stroke-linecap: round; }
 
 nav.primary-nav {
   display: flex;
