@@ -69,9 +69,39 @@
     var hub = { x: 0, y: 0 };
     var t = 0;
     var rafId = null;
+    var focal = 0;
+
+    // 3D orbit: nodes spin around the ring's own plane first, then the whole
+    // ring is tilted toward the viewer around a fixed X axis. Spinning before
+    // tilting (rather than after) is what makes each node's screen height
+    // change with the spin angle, so they visibly rise/fall as they orbit
+    // instead of only sliding sideways.
+    var TILT_X = (32 * Math.PI) / 180;
+    var SIN_TILT = Math.sin(TILT_X);
+    var COS_TILT = Math.cos(TILT_X);
+    var SPIN_SPEED = 0.15; // ~40-60s per full rotation, independent of sweep/pulse rates
+    var FROZEN_SPIN = 0.6; // radians; a non-round angle avoids an edge-on node when frozen
 
     function getColor(varName) {
       return getComputedStyle(root).getPropertyValue(varName).trim();
+    }
+
+    // Projects a point on the node ring (base angle + current spin) from 3D
+    // into 2D screen space, returning position plus depth-derived cues.
+    function project(baseAngle, radius, spinAngle) {
+      var a = baseAngle + spinAngle;
+      var x1 = Math.cos(a) * radius;
+      var z1 = Math.sin(a) * radius;
+      var y2 = -z1 * SIN_TILT;
+      var z2 = z1 * COS_TILT;
+      var scale = focal / (focal + z2);
+      return {
+        x: hub.x + x1 * scale,
+        y: hub.y + y2 * scale,
+        scale: scale,
+        z: z2,
+        depth: (1 - z2 / radius) / 2 // normalized 0 (far) .. 1 (near); z2 negative = nearer camera
+      };
     }
 
     function resize() {
@@ -86,15 +116,10 @@
       hub.x = size / 2;
       hub.y = size / 2;
       var radius = size * 0.3;
+      focal = size * 1.6;
       nodes = labels.map(function (label, i) {
         var angle = (Math.PI * 2 * i) / labels.length - Math.PI / 2;
-        return {
-          label: label,
-          angle: angle,
-          radius: radius,
-          x: hub.x + Math.cos(angle) * radius,
-          y: hub.y + Math.sin(angle) * radius
-        };
+        return { label: label, baseAngle: angle, radius: radius };
       });
       draw(size);
     }
@@ -106,8 +131,10 @@
       var amberColor = getColor('--amber') || '#e1a13b';
       var inkColor = getColor('--ink') || '#12211c';
       var hubRadius = size * 0.3;
+      var spinAngle = reduceMotion ? FROZEN_SPIN : t * SPIN_SPEED;
 
-      // slow radar sweep, very faint
+      // slow radar sweep, very faint — stays flat (hub-centered), reads as a
+      // sensor-scan overlay rather than part of the physical 3D diagram
       var sweepAngle = reduceMotion ? -Math.PI / 4 : t * 0.35;
       var sweepGrad = ctx.createConicGradient
         ? ctx.createConicGradient(sweepAngle, hub.x, hub.y)
@@ -125,24 +152,43 @@
       }
       ctx.restore();
 
-      // measurement rings
+      // measurement rings: tilted ellipses in the same 3D plane as the nodes
       ctx.strokeStyle = tealColor;
       ctx.globalAlpha = 0.16;
       ctx.lineWidth = 1;
       [0.62, 1].forEach(function (f) {
+        var steps = 40;
         ctx.beginPath();
-        ctx.arc(hub.x, hub.y, hubRadius * f, 0, Math.PI * 2);
+        for (var s = 0; s <= steps; s++) {
+          var p = project((Math.PI * 2 * s) / steps, hubRadius * f, spinAngle);
+          if (s === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        }
         ctx.stroke();
       });
       ctx.globalAlpha = 1;
 
-      // spokes with fade-out gradient + midpoint tick
-      nodes.forEach(function (n) {
+      // project all nodes, then draw farthest-to-nearest so occlusion reads correctly
+      var projected = nodes.map(function (n) {
+        var p = project(n.baseAngle, n.radius, spinAngle);
+        return {
+          label: n.label,
+          x: p.x,
+          y: p.y,
+          scale: p.scale,
+          depth: p.depth
+        };
+      });
+      // ascending depth = farthest first, nearest last (drawn on top)
+      projected.sort(function (a, b) { return a.depth - b.depth; });
+
+      // spokes with depth-modulated gradient + midpoint tick
+      projected.forEach(function (n) {
         var grad = ctx.createLinearGradient(hub.x, hub.y, n.x, n.y);
         grad.addColorStop(0, color_mix(tealColor, 0.75));
-        grad.addColorStop(1, color_mix(tealColor, 0.12));
+        grad.addColorStop(1, color_mix(tealColor, 0.08 + n.depth * 0.2));
         ctx.strokeStyle = grad;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 0.75 + n.depth * 0.5;
         ctx.beginPath();
         ctx.moveTo(hub.x, hub.y);
         ctx.lineTo(n.x, n.y);
@@ -150,7 +196,8 @@
 
         var mx = hub.x + (n.x - hub.x) * 0.62;
         var my = hub.y + (n.y - hub.y) * 0.62;
-        var perp = n.angle + Math.PI / 2;
+        var lineAngle = Math.atan2(n.y - hub.y, n.x - hub.x);
+        var perp = lineAngle + Math.PI / 2;
         var tickLen = 3.5;
         ctx.strokeStyle = color_mix(tealColor, 0.4);
         ctx.beginPath();
@@ -159,34 +206,35 @@
         ctx.stroke();
       });
 
-      // node reticles: outer ring + inner pulsing dot
-      nodes.forEach(function (n, i) {
+      // node reticles: outer ring + inner pulsing dot, sized/faded by depth
+      projected.forEach(function (n, i) {
         var phase = reduceMotion ? 0.7 : Math.sin(t * 1.4 + i * 1.3) * 0.5 + 0.5;
 
         ctx.beginPath();
-        ctx.arc(n.x, n.y, 6, 0, Math.PI * 2);
-        ctx.strokeStyle = color_mix(tealColor, 0.5);
+        ctx.arc(n.x, n.y, 6 * n.scale, 0, Math.PI * 2);
+        ctx.strokeStyle = color_mix(tealColor, 0.35 + n.depth * 0.35);
         ctx.lineWidth = 1;
         ctx.stroke();
 
         ctx.beginPath();
-        ctx.arc(n.x, n.y, 2.5, 0, Math.PI * 2);
+        ctx.arc(n.x, n.y, 2.5 * n.scale, 0, Math.PI * 2);
         ctx.fillStyle = amberColor;
         ctx.globalAlpha = 0.6 + phase * 0.4;
         ctx.fill();
         ctx.globalAlpha = 1;
 
+        var dirAngle = Math.atan2(n.y - hub.y, n.x - hub.x);
         ctx.font = '600 9px "JetBrains Mono", monospace';
         ctx.fillStyle = inkColor;
-        ctx.globalAlpha = 0.78;
-        var offsetX = Math.cos(n.angle) * 15;
-        var offsetY = Math.sin(n.angle) * 15;
-        ctx.textAlign = Math.cos(n.angle) > 0.3 ? 'left' : Math.cos(n.angle) < -0.3 ? 'right' : 'center';
+        ctx.globalAlpha = 0.55 + n.depth * 0.3;
+        var offsetX = Math.cos(dirAngle) * (15 / n.scale);
+        var offsetY = Math.sin(dirAngle) * (15 / n.scale);
+        ctx.textAlign = Math.cos(dirAngle) > 0.3 ? 'left' : Math.cos(dirAngle) < -0.3 ? 'right' : 'center';
         ctx.fillText(n.label, n.x + offsetX, n.y + offsetY);
         ctx.globalAlpha = 1;
       });
 
-      // hub: soft glow + concentric rings + core
+      // hub: soft glow + concentric rings + core — fixed focal point, drawn on top
       var pulse = reduceMotion ? 0 : Math.sin(t) * 0.5 + 0.5;
       var glow = ctx.createRadialGradient(hub.x, hub.y, 0, hub.x, hub.y, 26);
       glow.addColorStop(0, color_mix(amberColor, 0.28));
